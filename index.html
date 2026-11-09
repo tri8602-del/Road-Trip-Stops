@@ -18,7 +18,7 @@
 <body>
   <header class="top">
     <h1>Road Trip Stops</h1>
-    <span class="ver" id="ver">v1.0.0</span>
+    <span class="ver" id="ver">v1.1.0</span>
   </header>
 
   <main>
@@ -34,39 +34,54 @@
 
     <!-- Trip -->
     <section class="card" id="tripCard">
-      <label class="field">
-        <span class="field-label">From</span>
-        <div class="input-wrap">
-          <input id="fromInput" type="text" placeholder="My location" autocomplete="off" enterkeyhint="next">
-          <button class="icon-btn" id="useMyLocation" type="button" aria-label="Use my location" title="Use my location">📍</button>
+      <!-- compact view once a route is set -->
+      <div id="tripCompact" class="trip-compact" hidden>
+        <div class="trip-line">
+          <div class="grow">
+            <div class="small">Heading to</div>
+            <strong id="compactDest"></strong>
+            <div><strong id="sumDist"></strong> · <span id="sumTime"></span></div>
+            <div class="small" id="sumWhere"></div>
+          </div>
+          <button class="icon-btn" id="starDestCompact" type="button" aria-label="Save this destination" title="Save this destination">☆</button>
         </div>
-        <ul class="suggest" id="fromSuggest" hidden></ul>
-      </label>
-      <label class="field">
-        <span class="field-label">Where are you headed?</span>
-        <div class="input-wrap">
-          <input id="destInput" type="text" placeholder="Address or place" autocomplete="off" enterkeyhint="go">
-          <button class="icon-btn" id="clearDest" type="button" aria-label="Clear destination" title="Clear">✕</button>
+        <div class="row">
+          <button class="btn soft grow" id="rerouteBtn" type="button">↻ Re-route from here</button>
+          <button class="btn soft grow" id="changeTrip" type="button">Change trip</button>
         </div>
-        <ul class="suggest" id="destSuggest" hidden></ul>
-      </label>
-      <div class="row">
-        <button class="btn primary big grow" id="routeBtn" type="button">Show my route</button>
       </div>
-      <div id="tripSummary" class="summary" hidden>
-        <div><strong id="sumDist"></strong> · <span id="sumTime"></span></div>
-        <div class="small" id="sumWhere"></div>
-        <button class="btn soft" id="rerouteBtn" type="button">↻ Re-route from here</button>
+      <div id="tripEdit">
+        <label class="field">
+          <span class="field-label">From</span>
+          <div class="input-wrap">
+            <input id="fromInput" type="text" placeholder="My location" autocomplete="off" enterkeyhint="next">
+            <button class="icon-btn" id="useMyLocation" type="button" aria-label="Use my location" title="Use my location">📍</button>
+          </div>
+          <ul class="suggest" id="fromSuggest" hidden></ul>
+        </label>
+        <label class="field">
+          <span class="field-label">Where are you headed?</span>
+          <div class="input-wrap">
+            <input id="destInput" type="text" placeholder="Address or place" autocomplete="off" enterkeyhint="go">
+            <button class="icon-btn" id="starDest" type="button" aria-label="Save this destination" title="Save this destination">☆</button>
+          </div>
+          <ul class="suggest" id="destSuggest" hidden></ul>
+        </label>
+        <div class="saved-row" id="savedRow">
+          <div class="chips" id="savedChips"></div>
+          <button type="button" class="btn link-inline" id="manageSaved">★ Saved places</button>
+        </div>
+        <div class="row">
+          <button class="btn primary big grow" id="routeBtn" type="button">Show my route</button>
+        </div>
       </div>
       <p id="tripMsg" class="msg" role="status"></p>
     </section>
 
-    <div id="map" class="map" aria-label="Map of your route"></div>
-
     <!-- Search -->
     <section class="card" id="searchCard">
-      <form id="searchForm" class="search-row">
-        <input id="searchInput" type="search" placeholder="Search ahead: Chick-fil-A, gas, restroom…" autocomplete="off" enterkeyhint="search">
+      <form id="searchForm" class="search-row" action="#">
+        <input id="searchInput" type="search" name="q" placeholder="Search ahead: Chick-fil-A, gas…" autocomplete="off" enterkeyhint="search">
         <button class="btn primary" id="searchBtn" type="submit">Search</button>
       </form>
       <div class="chips" id="quickChips">
@@ -99,6 +114,8 @@
       <p id="searchMsg" class="msg" role="status"></p>
     </section>
 
+    <div id="map" class="map" aria-label="Map of your route"></div>
+
     <ol id="results" class="results"></ol>
 
     <footer class="foot">
@@ -116,8 +133,40 @@
       <a id="addStopBtn" class="btn primary big" href="#" target="_blank" rel="noopener">Add stop in Apple Maps</a>
       <p class="small" id="addStopNote">Apple Maps opens with this stop first, then <span class="destName"></span>.</p>
       <a id="stopOnlyBtn" class="btn soft" href="#" target="_blank" rel="noopener">Just go to this stop</a>
+      <button id="saveStopBtn" class="btn soft" type="button">☆ Save this place</button>
       <a id="placeBtn" class="btn soft" href="#" target="_blank" rel="noopener">See it in Apple Maps (photos, reviews)</a>
       <button id="sheetClose" class="btn link" type="button">Back to the list</button>
+    </div>
+  </div>
+
+  <!-- Save / rename a place -->
+  <div id="saveSheet" class="sheet" hidden>
+    <form class="sheet-card" id="saveForm" role="dialog" aria-modal="true" aria-labelledby="saveTitle" action="#">
+      <h2 id="saveTitle">Save place</h2>
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input id="saveName" type="text" placeholder="Home, Grandma's…" autocomplete="off" enterkeyhint="done" maxlength="60">
+      </label>
+      <label class="field" id="saveAddrField">
+        <span class="field-label">Address or place</span>
+        <input id="saveAddr" type="text" placeholder="Start typing an address" autocomplete="off" enterkeyhint="next">
+        <ul class="suggest" id="saveSuggest" hidden></ul>
+      </label>
+      <p class="small" id="saveWhere"></p>
+      <button class="btn primary big" id="saveConfirm" type="submit">Save</button>
+      <button class="btn link" id="saveCancel" type="button">Cancel</button>
+    </form>
+  </div>
+
+  <!-- Saved places list -->
+  <div id="savedSheet" class="sheet" hidden>
+    <div class="sheet-card tall" role="dialog" aria-modal="true" aria-labelledby="savedTitle">
+      <h2 id="savedTitle">Saved places</h2>
+      <p class="small">Saved only on this phone.</p>
+      <ul id="savedList" class="saved-list"></ul>
+      <p class="small" id="savedEmpty">Nothing saved yet. Tap ☆ next to a place to save it.</p>
+      <button class="btn soft" id="addSavedBtn" type="button">＋ Add a place</button>
+      <button class="btn link" id="savedClose" type="button">Done</button>
     </div>
   </div>
 

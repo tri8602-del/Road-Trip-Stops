@@ -3,6 +3,7 @@ import { fetchRoute, osrmTable, suggestPlaces, reverseName, searchBox, stepsToPl
 import { findStops, addExits } from './pipeline.js';
 import { openNow } from './hours.js';
 import { addStopUrl, directionsUrl, legacyDirectionsUrl, placeUrl, supportsStops } from './apple.js';
+import { loadSaved, storeSaved, addSaved, renameSaved, removeSaved, findSavedAt, matchSaved } from './saved.js';
 
 const $ = (id) => document.getElementById(id);
 const KEY = 'rts.v1';
@@ -19,6 +20,8 @@ const state = {
   results: [],
   nextStop: null,        // { name, ll } after she adds a stop
   searchText: '',
+  editingTrip: false,
+  saved: [],
 };
 
 // ---------- saving ----------
@@ -117,7 +120,16 @@ function updateWhere() {
   $('sumWhere').textContent = pos.onRoute
     ? `You're on the route. Searches look ahead of you.`
     : state.gps ? `You're not on this route right now, so searches start from ${r.startLabel || 'the start'}.` : `Searches start from ${r.startLabel || 'the start of the route'}.`;
-  $('tripSummary').hidden = false;
+  showTripMode();
+}
+
+/** Once a route is set, the trip card shrinks to one line so Search sits near the top of the screen. */
+function showTripMode() {
+  const compact = !!state.route && !!state.dest && !state.editingTrip;
+  $('tripCompact').hidden = !compact;
+  $('tripEdit').hidden = compact;
+  if (state.dest) $('compactDest').textContent = state.dest.label;
+  paintStars();
 }
 function timeAt(along) {
   const r = state.route; const i = indexAtDistance(r, along); return r.cumTime[i];
@@ -143,6 +155,7 @@ async function makeRoute({ fromHere = false } = {}) {
     route.startLabel = startLabel;
     state.route = route; state.lastAlong = 0; state.results = [];
     renderResults();
+    state.editingTrip = false;
     drawRoute(); drawCar(); updateWhere(); save();
     msg.textContent = '';
   } catch (e) {
@@ -153,35 +166,57 @@ async function makeRoute({ fromHere = false } = {}) {
   }
 }
 
-// ---------- autocomplete ----------
-function autocomplete(input, list, onPick) {
+// ---------- autocomplete (saved places first, then address search) ----------
+function autocomplete(input, list, onPick, { star = true } = {}) {
   let timer, items = [], seq = 0;
   const close = () => { list.hidden = true; list.innerHTML = ''; };
+  const show = (savedHits, found) => {
+    items = [...savedHits.map((p) => ({ label: p.name, detail: p.address, ll: p.ll, saved: p })), ...found];
+    list.innerHTML = '';
+    for (const it of items) {
+      const li = document.createElement('li');
+      li.className = it.saved ? 'is-saved' : '';
+      li.innerHTML = `<span class="sg-text"><span class="sg-label"></span><span class="detail"></span></span>`;
+      li.querySelector('.sg-label').textContent = (it.saved ? '★ ' : '') + it.label;
+      li.querySelector('.detail').textContent = it.detail;
+      if (!it.saved && star) {
+        const starBtn = document.createElement('button');
+        starBtn.type = 'button'; starBtn.className = 'sg-star'; starBtn.textContent = findSavedAt(state.saved, it.ll) ? '★' : '☆';
+        starBtn.setAttribute('aria-label', `Save ${it.label}`);
+        starBtn.addEventListener('mousedown', (e) => e.preventDefault());
+        starBtn.addEventListener('click', (e) => { e.stopPropagation(); close(); openSaveSheet({ name: it.label, address: [it.label, it.detail].filter(Boolean).join(', '), ll: it.ll }); });
+        li.appendChild(starBtn);
+      }
+      li.addEventListener('mousedown', (e) => e.preventDefault());
+      li.addEventListener('click', () => { close(); onPick(it); });
+      list.appendChild(li);
+    }
+    list.hidden = !items.length;
+  };
+  const lookup = async (q) => {
+    const my = ++seq;
+    let found = [];
+    try { found = await suggestPlaces(q, state.gps || (state.route && state.route.coords[0])); } catch { found = []; }
+    if (my !== seq) return null;
+    show(matchSaved(state.saved, q), found);
+    return items;
+  };
+  input.addEventListener('focus', () => { if (!input.value.trim() && state.saved.length) show(state.saved, []); });
   input.addEventListener('input', () => {
     clearTimeout(timer);
     const q = input.value.trim();
-    if (q.length < 3) return close();
-    timer = setTimeout(async () => {
-      const my = ++seq;
-      try {
-        items = await suggestPlaces(q, state.gps || (state.route && state.route.coords[0]));
-      } catch { items = []; }
-      if (my !== seq) return;
-      list.innerHTML = '';
-      for (const it of items) {
-        const li = document.createElement('li');
-        li.innerHTML = `<span></span><span class="detail"></span>`;
-        li.firstChild.textContent = it.label; li.lastChild.textContent = it.detail;
-        li.addEventListener('mousedown', (e) => e.preventDefault());
-        li.addEventListener('click', () => { close(); onPick(it); });
-        list.appendChild(li);
-      }
-      list.hidden = !items.length;
-    }, 300);
+    if (q.length < 3) { seq++; return q ? show(matchSaved(state.saved, q), []) : state.saved.length ? show(state.saved, []) : close(); }
+    show(matchSaved(state.saved, q), []);
+    timer = setTimeout(() => lookup(q), 300);
   });
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && items.length && !list.hidden) { e.preventDefault(); close(); onPick(items[0]); }
-    if (e.key === 'Escape') close();
+  input.addEventListener('keydown', async (e) => {
+    if (e.key === 'Escape') return close();
+    if (e.key !== 'Enter') return;
+    // keyboard Go / Search key: take the first match, looking it up now if the list isn't ready
+    e.preventDefault();
+    const q = input.value.trim();
+    if (items.length && !list.hidden) { const it = items[0]; close(); return onPick(it); }
+    if (q.length >= 3) { clearTimeout(timer); const got = await lookup(q); if (got?.length) { close(); onPick(got[0]); } }
   });
   input.addEventListener('blur', () => setTimeout(close, 150));
 }
@@ -308,6 +343,8 @@ function openSheet(s) {
   $('placeBtn').href = placeUrl(s.ll, s.name);
   const remember = () => { state.nextStop = { name: s.name, ll: s.ll }; save(); showBanner(); setTimeout(() => { $('sheet').hidden = true; }, 300); };
   add.onclick = remember;
+  $('saveStopBtn').textContent = findSavedAt(state.saved, s.ll) ? '★ Saved (tap to rename)' : '☆ Save this place';
+  $('saveStopBtn').onclick = () => { $('sheet').hidden = true; openSaveSheet({ name: s.name, address: s.address ? `${s.name}, ${s.address}` : s.name, ll: s.ll }); };
   $('stopOnlyBtn').onclick = remember;
   $('sheet').hidden = false;
   selectResult(s, false);
@@ -320,6 +357,137 @@ function showBanner() {
   const multi = supportsStops(navigator.userAgent);
   $('continueBtn').href = multi ? directionsUrl(state.dest.ll) : legacyDirectionsUrl(state.dest.ll);
   b.hidden = false;
+}
+
+// ---------- saved places ----------
+function setSaved(list) {
+  state.saved = list;
+  storeSaved(localStorage, list);
+  renderSavedChips();
+  renderSavedList();
+  paintStars();
+}
+function useAsDestination(p) {
+  state.dest = { label: p.name, ll: p.ll };
+  $('destInput').value = p.name;
+  save();
+  makeRoute();
+}
+function useAsStart(p) {
+  state.from = { label: p.name, ll: p.ll };
+  $('fromInput').value = p.name;
+  save();
+  if (state.dest) makeRoute();
+}
+function renderSavedChips() {
+  const box = $('savedChips');
+  box.innerHTML = '';
+  for (const p of state.saved.slice(0, 6)) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip saved-chip'; b.textContent = `★ ${p.name}`;
+    b.title = `Go to ${p.address || p.name}`;
+    b.addEventListener('click', () => useAsDestination(p));
+    box.appendChild(b);
+  }
+  box.hidden = !state.saved.length;
+}
+function renderSavedList() {
+  const ul = $('savedList');
+  ul.innerHTML = '';
+  $('savedEmpty').hidden = state.saved.length > 0;
+  for (const p of state.saved) {
+    const li = document.createElement('li');
+    li.className = 'saved-item';
+    li.dataset.id = p.id;
+    li.innerHTML = `<div class="saved-name"></div><div class="small saved-addr"></div>
+      <div class="saved-actions">
+        <button type="button" class="btn primary" data-act="go">Go here</button>
+        <button type="button" class="btn soft-inline" data-act="start">Start here</button>
+        <button type="button" class="btn soft-inline" data-act="rename">Rename</button>
+        <button type="button" class="btn soft-inline danger" data-act="delete">Delete</button>
+      </div>`;
+    li.querySelector('.saved-name').textContent = `★ ${p.name}`;
+    li.querySelector('.saved-addr').textContent = p.address;
+    li.addEventListener('click', (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'go') { $('savedSheet').hidden = true; useAsDestination(p); }
+      if (act === 'start') { $('savedSheet').hidden = true; useAsStart(p); }
+      if (act === 'rename') openSaveSheet({ id: p.id, name: p.name, address: p.address, ll: p.ll });
+      if (act === 'delete') {
+        const btn = e.target.closest('[data-act]');
+        if (btn.dataset.confirm) setSaved(removeSaved(state.saved, p.id));
+        else { btn.dataset.confirm = '1'; btn.textContent = 'Tap again to delete'; }
+      }
+    });
+    ul.appendChild(li);
+  }
+}
+function paintStars() {
+  const on = state.dest && findSavedAt(state.saved, state.dest.ll);
+  for (const id of ['starDest', 'starDestCompact']) {
+    $(id).textContent = on ? '★' : '☆';
+    $(id).classList.toggle('on', !!on);
+  }
+}
+
+// One sheet for: saving a known place (ll given), renaming (id given), or adding by typing an address (nothing given).
+let saveTarget = null;
+function openSaveSheet(t = {}) {
+  saveTarget = { ...t };
+  const existing = t.ll && !t.id ? findSavedAt(state.saved, t.ll) : null;
+  if (existing) saveTarget.id = existing.id;
+  const known = !!t.ll;
+  $('saveTitle').textContent = saveTarget.id ? 'Rename saved place' : known ? 'Save place' : 'Add a place';
+  $('saveName').value = existing ? existing.name : t.name || '';
+  $('saveAddrField').hidden = known;
+  $('saveAddr').value = '';
+  $('saveWhere').textContent = known ? t.address || '' : '';
+  $('saveSheet').hidden = false;
+  $('saveName').focus(); // same tap, so iPhone shows the keyboard
+}
+function confirmSave() {
+  const t = saveTarget;
+  if (!t) return;
+  const name = $('saveName').value.trim();
+  if (!t.ll) { $('saveWhere').textContent = 'Pick the address from the list first.'; $('saveAddr').focus(); return; }
+  if (!name) { $('saveWhere').textContent = 'Give it a name, like Home.'; $('saveName').focus(); return; }
+  setSaved(t.id ? renameSaved(state.saved, t.id, name) : addSaved(state.saved, { name, address: t.address, ll: t.ll }));
+  $('saveSheet').hidden = true;
+  saveTarget = null;
+}
+function starDestination() {
+  if (!state.dest) { $('tripMsg').textContent = 'Pick a destination first, then tap ☆ to save it.'; return; }
+  openSaveSheet({ name: state.dest.label, address: state.dest.label, ll: state.dest.ll });
+}
+
+// ---------- bottom bars & keyboard ----------
+// Safari's bottom toolbar and the iPhone home bar can sit over the page (viewport-fit=cover).
+// We pad the page and sheets by the safe area, plus room for Safari's toolbar when not opened from the Home Screen,
+// and lift sheets above the on-screen keyboard using visualViewport.
+function initViewport() {
+  const root = document.documentElement;
+  const standalone = window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+  root.classList.toggle('standalone', !!standalone);
+  root.classList.toggle('in-browser', !standalone);
+  const vv = window.visualViewport;
+  const update = () => {
+    if (!vv) return;
+    const covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    root.style.setProperty('--kb', `${Math.round(covered)}px`);
+    root.classList.toggle('kb-open', covered > 120);
+  };
+  vv?.addEventListener('resize', update);
+  vv?.addEventListener('scroll', update);
+  update();
+  // keep whatever she's typing in visible above the keyboard
+  document.addEventListener('focusin', (e) => {
+    const el = e.target;
+    if (!el.matches?.('input')) return;
+    setTimeout(() => {
+      if (el.id === 'searchInput') $('searchCard').scrollIntoView({ block: 'start', behavior: 'smooth' });
+      else if (!el.closest('.sheet')) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 250);
+  });
 }
 
 // ---------- filters ----------
@@ -345,24 +513,42 @@ function paintSummary() {
 // ---------- start ----------
 function init() {
   load();
+  state.saved = loadSaved(localStorage);
+  initViewport();
   initMap();
   initFilters();
   if (state.dest) $('destInput').value = state.dest.label;
   if (state.from) $('fromInput').value = state.from.label;
   if (state.route) { drawRoute(); updateWhere(); }
+  showTripMode();
+  renderSavedChips(); renderSavedList();
   showBanner();
 
   autocomplete($('destInput'), $('destSuggest'), (it) => { state.dest = { label: it.label, ll: it.ll }; $('destInput').value = it.label; save(); makeRoute(); });
   autocomplete($('fromInput'), $('fromSuggest'), (it) => { state.from = { label: it.label, ll: it.ll }; $('fromInput').value = it.label; save(); if (state.dest) makeRoute(); });
   $('fromInput').addEventListener('change', () => { if (!$('fromInput').value.trim()) { state.from = null; save(); } });
   $('useMyLocation').addEventListener('click', () => { state.from = null; $('fromInput').value = ''; save(); if (state.dest) makeRoute({ fromHere: true }); else getPosition().then((p) => { state.gps = p; drawCar(); map.setView([p[1], p[0]], 11); }).catch((e) => { $('tripMsg').textContent = e.message; }); });
-  $('clearDest').addEventListener('click', () => { $('destInput').value = ''; $('destInput').focus(); });
+  $('starDest').addEventListener('click', starDestination);
+  $('starDestCompact').addEventListener('click', starDestination);
+  $('changeTrip').addEventListener('click', () => { state.editingTrip = true; showTripMode(); $('destInput').focus(); });
+  $('manageSaved').addEventListener('click', () => { renderSavedList(); $('savedSheet').hidden = false; });
+  $('savedClose').addEventListener('click', () => { $('savedSheet').hidden = true; });
+  $('addSavedBtn').addEventListener('click', () => openSaveSheet({}));
+  $('saveForm').addEventListener('submit', (e) => { e.preventDefault(); confirmSave(); });
+  $('saveCancel').addEventListener('click', () => { $('saveSheet').hidden = true; saveTarget = null; });
+  autocomplete($('saveAddr'), $('saveSuggest'), (it) => {
+    if (it.saved) { $('saveWhere').textContent = `${it.label} is already saved.`; return; }
+    saveTarget = { ...saveTarget, ll: it.ll, address: [it.label, it.detail].filter(Boolean).join(', ') };
+    $('saveAddr').value = it.label;
+    $('saveWhere').textContent = saveTarget.address;
+    if (!$('saveName').value.trim()) $('saveName').focus();
+  }, { star: false });
+  for (const id of ['sheet', 'saveSheet', 'savedSheet']) $(id).addEventListener('click', (e) => { if (e.target === $(id)) $(id).hidden = true; });
   $('routeBtn').addEventListener('click', () => makeRoute());
   $('rerouteBtn').addEventListener('click', () => makeRoute({ fromHere: true }));
   $('searchForm').addEventListener('submit', (e) => { e.preventDefault(); $('searchInput').blur(); runSearch($('searchInput').value); });
   $('quickChips').addEventListener('click', (e) => { const c = e.target.closest('.chip'); if (!c) return; $('searchInput').value = c.dataset.q; runSearch(c.dataset.q); });
   $('sheetClose').addEventListener('click', () => { $('sheet').hidden = true; });
-  $('sheet').addEventListener('click', (e) => { if (e.target === $('sheet')) $('sheet').hidden = true; });
   $('clearStop').addEventListener('click', () => { state.nextStop = null; save(); showBanner(); });
 
   watchPosition();
@@ -376,4 +562,5 @@ function init() {
   }).catch(() => {});
 }
 window.__rts = state; // read-only peek for tests
+window.__rtsHooks = { renderResults: () => renderResults(), openSheet: (s) => openSheet(s) }; // used by layout tests
 init();
