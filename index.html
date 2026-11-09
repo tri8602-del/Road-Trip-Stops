@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Road Trip Stops</title>
+  <meta name="theme-color" content="#2f6f73">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Trip Stops">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/favicon-32.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="vendor/leaflet.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Road Trip Stops</h1>
+    <span class="ver" id="ver">v1.0.0</span>
+  </header>
+
+  <main>
+    <!-- After-stop banner: one tap back to the trip -->
+    <section id="nextBanner" class="banner" hidden>
+      <div class="banner-text">
+        <div class="small">After your stop at</div>
+        <strong id="nextStopName"></strong>
+      </div>
+      <a id="continueBtn" class="btn primary big" href="#" target="_blank" rel="noopener"><span id="continueDest"></span></a>
+      <button id="clearStop" class="btn link">I'm done with this stop</button>
+    </section>
+
+    <!-- Trip -->
+    <section class="card" id="tripCard">
+      <label class="field">
+        <span class="field-label">From</span>
+        <div class="input-wrap">
+          <input id="fromInput" type="text" placeholder="My location" autocomplete="off" enterkeyhint="next">
+          <button class="icon-btn" id="useMyLocation" type="button" aria-label="Use my location" title="Use my location">📍</button>
+        </div>
+        <ul class="suggest" id="fromSuggest" hidden></ul>
+      </label>
+      <label class="field">
+        <span class="field-label">Where are you headed?</span>
+        <div class="input-wrap">
+          <input id="destInput" type="text" placeholder="Address or place" autocomplete="off" enterkeyhint="go">
+          <button class="icon-btn" id="clearDest" type="button" aria-label="Clear destination" title="Clear">✕</button>
+        </div>
+        <ul class="suggest" id="destSuggest" hidden></ul>
+      </label>
+      <div class="row">
+        <button class="btn primary big grow" id="routeBtn" type="button">Show my route</button>
+      </div>
+      <div id="tripSummary" class="summary" hidden>
+        <div><strong id="sumDist"></strong> · <span id="sumTime"></span></div>
+        <div class="small" id="sumWhere"></div>
+        <button class="btn soft" id="rerouteBtn" type="button">↻ Re-route from here</button>
+      </div>
+      <p id="tripMsg" class="msg" role="status"></p>
+    </section>
+
+    <div id="map" class="map" aria-label="Map of your route"></div>
+
+    <!-- Search -->
+    <section class="card" id="searchCard">
+      <form id="searchForm" class="search-row">
+        <input id="searchInput" type="search" placeholder="Search ahead: Chick-fil-A, gas, restroom…" autocomplete="off" enterkeyhint="search">
+        <button class="btn primary" id="searchBtn" type="submit">Search</button>
+      </form>
+      <div class="chips" id="quickChips">
+        <button type="button" class="chip" data-q="Gas">⛽ Gas</button>
+        <button type="button" class="chip" data-q="Food">🍔 Food</button>
+        <button type="button" class="chip" data-q="Restroom">🚻 Restroom</button>
+        <button type="button" class="chip" data-q="Coffee">☕ Coffee</button>
+      </div>
+      <details class="filters" id="filters">
+        <summary>Options: <span id="filterSummary"></span></summary>
+        <div class="filter-group">
+          <div class="field-label">Most time a stop can add</div>
+          <div class="seg" data-name="maxDetour">
+            <button type="button" data-v="5">5 min</button><button type="button" data-v="10">10 min</button><button type="button" data-v="15">15 min</button><button type="button" data-v="20">20 min</button>
+          </div>
+        </div>
+        <div class="filter-group">
+          <div class="field-label">How far ahead to look</div>
+          <div class="seg" data-name="lookAhead">
+            <button type="button" data-v="25">25 mi</button><button type="button" data-v="50">50 mi</button><button type="button" data-v="100">100 mi</button><button type="button" data-v="150">150 mi</button>
+          </div>
+        </div>
+        <div class="filter-group">
+          <div class="field-label">Order</div>
+          <div class="seg" data-name="sort">
+            <button type="button" data-v="best">Least extra time</button><button type="button" data-v="soonest">Soonest</button>
+          </div>
+        </div>
+      </details>
+      <p id="searchMsg" class="msg" role="status"></p>
+    </section>
+
+    <ol id="results" class="results"></ol>
+
+    <footer class="foot">
+      Routes &amp; times: <a href="https://project-osrm.org/" target="_blank" rel="noopener">OSRM</a> ·
+      Places: <a href="https://nominatim.org/" target="_blank" rel="noopener">Nominatim</a>, <a href="https://photon.komoot.io/" target="_blank" rel="noopener">Photon</a> ·
+      Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
+    </footer>
+  </main>
+
+  <!-- Stop sheet -->
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <h2 id="sheetTitle"></h2>
+      <p id="sheetFacts" class="small"></p>
+      <a id="addStopBtn" class="btn primary big" href="#" target="_blank" rel="noopener">Add stop in Apple Maps</a>
+      <p class="small" id="addStopNote">Apple Maps opens with this stop first, then <span class="destName"></span>.</p>
+      <a id="stopOnlyBtn" class="btn soft" href="#" target="_blank" rel="noopener">Just go to this stop</a>
+      <a id="placeBtn" class="btn soft" href="#" target="_blank" rel="noopener">See it in Apple Maps (photos, reviews)</a>
+      <button id="sheetClose" class="btn link" type="button">Back to the list</button>
+    </div>
+  </div>
+
+  <script src="vendor/leaflet.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

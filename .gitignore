@@ -1,0 +1,4 @@
+e2e/shots/
+node_modules/
+.DS_Store
+e2e/last-results.json
