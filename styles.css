@@ -7,6 +7,7 @@
   --radius: 16px;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; background: var(--bg); color: var(--ink);
   font: 17px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif; -webkit-text-size-adjust: 100%; }
 .top { padding-left: max(18px, env(safe-area-inset-left)); display: flex; align-items: baseline; justify-content: space-between; padding: calc(env(safe-area-inset-top) + 12px) 18px 6px; }
@@ -104,7 +105,7 @@ html.kb-open .sheet-card { padding-bottom: 18px; }
 .icon-btn.on { color: var(--sun); border-color: #f2cfa6; }
 /* saved places */
 .saved-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 12px; }
-.saved-row .chips { margin-top: 0; }
+.saved-row .chips { margin-top: 0; width: 100%; }
 .saved-row .chips[hidden] { display: none; }
 .saved-chip { border-color: #f2cfa6; background: #fff8ef; }
 .btn.link-inline { background: none; color: var(--teal); padding: 8px 6px; min-height: 44px; font-weight: 600; }
@@ -121,3 +122,20 @@ html.kb-open .sheet-card { padding-bottom: 18px; }
 .btn.danger { color: var(--no); }
 .field[hidden] { display: none; }
 @media (prefers-color-scheme: dark) { .saved-chip { background: #2b261e; border-color: #5b4a33; } }
+
+/* v1.2: hours + home */
+.hours.closing-soon { color: #9a5a12; font-weight: 600; }
+.hours.closing-soon .badge-soon { display: inline-block; }
+.hours.unknown { color: var(--muted); font-style: italic; }
+.hours.closed { color: var(--no); }
+.section-head { list-style: none; margin: 18px 4px 4px; display: flex; flex-direction: column; gap: 2px; }
+.section-head strong { font-size: 16px; color: var(--ink); }
+.result.sec-unknown, .result.sec-closed { background: #fbfaf7; }
+.saved-buttons { display: flex; gap: 8px; flex-wrap: wrap; width: 100%; }
+.saved-buttons .btn { flex: 1; min-height: 48px; }
+.saved-buttons .btn[hidden] { display: none; }
+.home-prompt { display: flex; align-items: center; gap: 12px; justify-content: space-between; background: #fff8ef; border: 1.5px solid #f2cfa6;
+  border-radius: 14px; padding: 12px; margin: 10px 0; }
+.home-prompt[hidden] { display: none; }
+@media (prefers-color-scheme: dark) { .hours.closing-soon { color: #f2b56b; } .home-prompt { background: #2b261e; border-color: #5b4a33; } .result.sec-unknown, .result.sec-closed { background: #1b2225; } }
+.hours .hint { font-style: normal; }

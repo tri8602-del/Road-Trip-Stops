@@ -18,7 +18,7 @@
 <body>
   <header class="top">
     <h1>Road Trip Stops</h1>
-    <span class="ver" id="ver">v1.1.0</span>
+    <span class="ver" id="ver">v1.2.0</span>
   </header>
 
   <main>
@@ -69,11 +69,15 @@
         </label>
         <div class="saved-row" id="savedRow">
           <div class="chips" id="savedChips"></div>
-          <button type="button" class="btn link-inline" id="manageSaved">★ Saved places</button>
+          <div class="saved-buttons">
+            <button type="button" class="btn soft-inline" id="setHomeBtn">🏠 Set Home</button>
+            <button type="button" class="btn soft-inline" id="manageSaved">★ Saved places</button>
+          </div>
         </div>
         <div class="row">
           <button class="btn primary big grow" id="routeBtn" type="button">Show my route</button>
         </div>
+        <button class="btn link" id="keepTrip" type="button" hidden>Keep my current trip</button>
       </div>
       <p id="tripMsg" class="msg" role="status"></p>
     </section>
@@ -92,6 +96,12 @@
       </div>
       <details class="filters" id="filters">
         <summary>Options: <span id="filterSummary"></span></summary>
+        <div class="filter-group">
+          <div class="field-label">Hours</div>
+          <div class="seg" data-name="openOnly">
+            <button type="button" data-v="1">Open when I get there</button><button type="button" data-v="0">Show closed too</button>
+          </div>
+        </div>
         <div class="filter-group">
           <div class="field-label">Most time a stop can add</div>
           <div class="seg" data-name="maxDetour">
@@ -163,6 +173,10 @@
     <div class="sheet-card tall" role="dialog" aria-modal="true" aria-labelledby="savedTitle">
       <h2 id="savedTitle">Saved places</h2>
       <p class="small">Saved only on this phone.</p>
+      <div class="home-prompt" id="homePrompt" hidden>
+        <div><strong>🏠 Add your home address</strong><div class="small">Then getting home is one tap.</div></div>
+        <button type="button" class="btn primary" id="homePromptBtn">Add Home</button>
+      </div>
       <ul id="savedList" class="saved-list"></ul>
       <p class="small" id="savedEmpty">Nothing saved yet. Tap ☆ next to a place to save it.</p>
       <button class="btn soft" id="addSavedBtn" type="button">＋ Add a place</button>

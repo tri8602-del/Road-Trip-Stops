@@ -1,7 +1,7 @@
 import { buildRoute, projectOnRoute, indexAtDistance, MI } from './geo.js';
 import { fetchRoute, osrmTable, suggestPlaces, reverseName, searchBox, stepsToPlace } from './services.js';
 import { findStops, addExits } from './pipeline.js';
-import { openNow } from './hours.js';
+import { groupByHours, chainHint } from './openhours.js';
 import { addStopUrl, directionsUrl, legacyDirectionsUrl, placeUrl, supportsStops } from './apple.js';
 import { loadSaved, storeSaved, addSaved, renameSaved, removeSaved, findSavedAt, matchSaved } from './saved.js';
 
@@ -16,7 +16,9 @@ const state = {
   route: null,
   gps: null,             // [lon, lat]
   lastAlong: 0,
-  filters: { maxDetour: 10, lookAhead: 50, sort: 'best' },
+  filters: { maxDetour: 10, lookAhead: 50, sort: 'best', openOnly: 1 },
+  rawStops: [],
+  lastQuery: null,
   results: [],
   nextStop: null,        // { name, ll } after she adds a stop
   searchText: '',
@@ -129,6 +131,7 @@ function showTripMode() {
   $('tripCompact').hidden = !compact;
   $('tripEdit').hidden = compact;
   if (state.dest) $('compactDest').textContent = state.dest.label;
+  $('keepTrip').hidden = !(state.route && state.editingTrip);
   paintStars();
 }
 function timeAt(along) {
@@ -232,7 +235,7 @@ async function runSearch(text) {
   state.searchText = text;
   const my = ++searchSeq;
   $('searchBtn').disabled = true;
-  state.results = []; renderResults();
+  state.results = []; state.rawStops = []; state.lastQuery = null; renderResults();
   const pos = carPosition();
   const f = state.filters;
   try {
@@ -242,17 +245,10 @@ async function runSearch(text) {
       onProgress: (p) => { if (my === searchSeq) msg.textContent = p.stage === 'search' ? `Looking ${f.lookAhead} miles ahead… (${p.done} of ${p.total})` : 'Working out how much time each one adds…'; },
     });
     if (my !== searchSeq) return;
-    state.results = res.stops;
+    state.rawStops = res.stops;
+    state.lastQuery = { text, ahead: res.ahead, my, along: pos.along };
     state.searchAlong = pos.along;
-    renderResults();
-    if (!res.stops.length) {
-      msg.textContent = res.ahead
-        ? `Nothing ahead adds less than ${f.maxDetour} minutes. Try a longer limit in Options.`
-        : `No "${text}" found in the next ${f.lookAhead} miles. Try looking farther ahead.`;
-    } else {
-      msg.textContent = `${res.stops.length} ahead of you, least extra time first${f.sort === 'soonest' ? ' (sorted by soonest)' : ''}.`;
-      addExits(state.route, res.stops, pos.along, services, 6, (s) => { if (my === searchSeq) updateCard(s); });
-    }
+    applyHours();
   } catch (e) {
     if (my !== searchSeq) return;
     msg.className = 'msg warn';
@@ -260,6 +256,32 @@ async function runSearch(text) {
   } finally {
     if (my === searchSeq) $('searchBtn').disabled = false;
   }
+}
+
+/** Sort results into open / hours unknown / closed for the time she'd arrive, then show them. No network needed. */
+function applyHours() {
+  const msg = $('searchMsg');
+  const f = state.filters;
+  const q = state.lastQuery;
+  if (!q) return;
+  const g = groupByHours(state.rawStops, { nowMs: Date.now(), showClosed: !f.openOnly });
+  state.results = g.shown;
+  state.hoursCounts = { open: g.open.length, unknown: g.unknown.length, closed: g.closed.length };
+  renderResults();
+  msg.className = 'msg';
+  if (!state.rawStops.length) {
+    msg.textContent = q.ahead
+      ? `Nothing ahead adds less than ${f.maxDetour} minutes. Try a longer limit in Options.`
+      : `No "${q.text}" found in the next ${f.lookAhead} miles. Try looking farther ahead.`;
+    return;
+  }
+  const parts = [`${g.open.length} open when you'd get there`];
+  if (g.unknown.length) parts.push(`${g.unknown.length} with hours not listed`);
+  if (g.closed.length) parts.push(f.openOnly ? `${g.closed.length} closed (hidden)` : `${g.closed.length} closed`);
+  msg.textContent = `${parts.join(' · ')}. Least extra time first${f.sort === 'soonest' ? ' (sorted by soonest)' : ''}.`;
+  if (!state.results.length) msg.textContent = `Everything found ahead is closed when you'd get there. To see them anyway, open Options and choose "Show closed too".`;
+  const need = state.results.slice(0, 6).filter((s) => s.exit === undefined);
+  if (need.length) addExits(state.route, need, q.along, services, 6, (s) => { if (q.my === searchSeq) updateCard(s); });
 }
 
 function exitText(s) {
@@ -272,7 +294,7 @@ function exitText(s) {
 }
 
 function cardHTML(s, i) {
-  const hours = openNow(s.hours);
+  const hs = s.hoursStatus;
   const off = s.offRouteM / MI;
   const offText = off < 0.1 ? 'right by the road' : `${off.toFixed(1)} mi off the road`;
   return `
@@ -280,7 +302,7 @@ function cardHTML(s, i) {
     <div><h3></h3><span class="kind"></span></div>
     <div class="facts"><span><b>${fmtMi(s.aheadM)} mi</b> ahead</span><span class="detour"><b>+${Math.max(1, Math.round(s.detourS / 60))} min</b> extra</span><span>${offText}</span></div>
     <div class="exit">${escapeHTML(exitText(s))}</div>
-    ${hours ? `<div class="hours ${hours.open ? 'open' : 'closed'}">${escapeHTML(hours.text)}</div>` : ''}
+    ${hs ? `<div class="hours ${hs.status}">${hs.status === 'closing-soon' ? '<span class="badge-soon">⏰</span> ' : hs.status === 'unknown' ? '🕘 ' : ''}${escapeHTML(hs.text)}${hs.status === 'unknown' && chainHint(s) ? `<span class="hint"> · ${escapeHTML(chainHint(s))}</span>` : ''}</div>` : ''}
     <button class="btn primary" type="button" data-act="stop">Add this stop</button>`;
 }
 const escapeHTML = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -289,9 +311,19 @@ function renderResults() {
   const ol = $('results');
   ol.innerHTML = '';
   resultLayer.clearLayers();
+  const HEAD = { unknown: ['Hours not listed', "These places don't list their hours. Check before you go."], closed: ["Closed when you'd get there", 'Shown because "Show closed too" is on.'] };
+  let lastSection = 'open';
   state.results.forEach((s, i) => {
+    if (s.section && s.section !== lastSection && HEAD[s.section]) {
+      const h = document.createElement('li');
+      h.className = `section-head section-${s.section}`;
+      h.innerHTML = `<strong></strong><span class="small"></span>`;
+      h.firstChild.textContent = HEAD[s.section][0]; h.lastChild.textContent = HEAD[s.section][1];
+      ol.appendChild(h);
+    }
+    lastSection = s.section || lastSection;
     const li = document.createElement('li');
-    li.className = 'result';
+    li.className = 'result' + (s.section && s.section !== 'open' ? ` sec-${s.section}` : '');
     li.dataset.id = s.id;
     li.innerHTML = cardHTML(s, i);
     li.querySelector('h3').textContent = s.name;
@@ -379,22 +411,26 @@ function useAsStart(p) {
   save();
   if (state.dest) makeRoute();
 }
+const isHome = (p) => /\bhome\b/i.test(p.name);
+function openAddHome() { openSaveSheet({ name: 'Home' }); $('saveTitle').textContent = 'Set Home'; $('saveAddr').focus(); }
 function renderSavedChips() {
   const box = $('savedChips');
   box.innerHTML = '';
   for (const p of state.saved.slice(0, 6)) {
     const b = document.createElement('button');
-    b.type = 'button'; b.className = 'chip saved-chip'; b.textContent = `★ ${p.name}`;
+    b.type = 'button'; b.className = 'chip saved-chip'; b.textContent = `${isHome(p) ? '🏠' : '★'} ${p.name}`;
     b.title = `Go to ${p.address || p.name}`;
     b.addEventListener('click', () => useAsDestination(p));
     box.appendChild(b);
   }
   box.hidden = !state.saved.length;
+  $('setHomeBtn').hidden = state.saved.some(isHome);
 }
 function renderSavedList() {
   const ul = $('savedList');
   ul.innerHTML = '';
   $('savedEmpty').hidden = state.saved.length > 0;
+  $('homePrompt').hidden = state.saved.some(isHome);
   for (const p of state.saved) {
     const li = document.createElement('li');
     li.className = 'saved-item';
@@ -406,7 +442,7 @@ function renderSavedList() {
         <button type="button" class="btn soft-inline" data-act="rename">Rename</button>
         <button type="button" class="btn soft-inline danger" data-act="delete">Delete</button>
       </div>`;
-    li.querySelector('.saved-name').textContent = `★ ${p.name}`;
+    li.querySelector('.saved-name').textContent = `${isHome(p) ? '🏠' : '★'} ${p.name}`;
     li.querySelector('.saved-addr').textContent = p.address;
     li.addEventListener('click', (e) => {
       const act = e.target.closest('[data-act]')?.dataset.act;
@@ -499,7 +535,8 @@ function initFilters() {
       const b = e.target.closest('button'); if (!b) return;
       state.filters[name] = name === 'sort' ? b.dataset.v : Number(b.dataset.v);
       paint(); paintSummary(); save();
-      if (state.searchText && state.route) runSearch(state.searchText);
+      if (name === 'openOnly') applyHours(); // just re-sort what we have
+      else if (state.searchText && state.route) runSearch(state.searchText);
     });
     paint();
   });
@@ -507,7 +544,7 @@ function initFilters() {
 }
 function paintSummary() {
   const f = state.filters;
-  $('filterSummary').textContent = `up to ${f.maxDetour} min extra · next ${f.lookAhead} mi${f.sort === 'soonest' ? ' · soonest first' : ''}`;
+  $('filterSummary').textContent = `${f.openOnly ? 'open only · ' : ''}up to ${f.maxDetour} min extra · next ${f.lookAhead} mi${f.sort === 'soonest' ? ' · soonest first' : ''}`;
 }
 
 // ---------- start ----------
@@ -534,6 +571,9 @@ function init() {
   $('manageSaved').addEventListener('click', () => { renderSavedList(); $('savedSheet').hidden = false; });
   $('savedClose').addEventListener('click', () => { $('savedSheet').hidden = true; });
   $('addSavedBtn').addEventListener('click', () => openSaveSheet({}));
+  $('setHomeBtn').addEventListener('click', openAddHome);
+  $('keepTrip').addEventListener('click', () => { state.editingTrip = false; if (state.dest) $('destInput').value = state.dest.label; showTripMode(); });
+  $('homePromptBtn').addEventListener('click', openAddHome);
   $('saveForm').addEventListener('submit', (e) => { e.preventDefault(); confirmSave(); });
   $('saveCancel').addEventListener('click', () => { $('saveSheet').hidden = true; saveTarget = null; });
   autocomplete($('saveAddr'), $('saveSuggest'), (it) => {

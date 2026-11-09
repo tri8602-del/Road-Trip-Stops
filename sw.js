@@ -1,7 +1,7 @@
 // Keeps the app itself available with a weak signal. Maps, routes and searches always use the network.
-const VERSION = 'rts-v1.1.0';
+const VERSION = 'rts-v1.2.0';
 const SHELL = ['./', './index.html', './styles.css', './manifest.webmanifest', './vendor/leaflet.js', './vendor/leaflet.css',
-  './js/app.js', './js/geo.js', './js/search.js', './js/pipeline.js', './js/services.js', './js/hours.js', './js/apple.js', './js/saved.js',
+  './js/app.js', './js/geo.js', './js/search.js', './js/pipeline.js', './js/services.js', './js/openhours.js', './vendor/hours-libs.mjs', './js/apple.js', './js/saved.js',
   './icons/apple-touch-icon.png', './icons/icon-192.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener('activate', (e) => {

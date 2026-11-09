@@ -88,7 +88,7 @@ with sync_playwright() as p:
             sels = ["#searchInput", "#searchBtn", "#rerouteBtn", "#changeTrip", "#starDestCompact"] + \
                    [f"#quickChips .chip:nth-child({i})" for i in range(1, 5)] + \
                    [f".seg[data-name={n}] button:nth-child({i})" for n in ("maxDetour", "lookAhead") for i in range(1, 5)] + \
-                   [".seg[data-name=sort] button:nth-child(1)", ".seg[data-name=sort] button:nth-child(2)"]
+                   [".seg[data-name=sort] button:nth-child(1)", ".seg[data-name=sort] button:nth-child(2)", ".seg[data-name=openOnly] button:nth-child(1)", ".seg[data-name=openOnly] button:nth-child(2)"]
             bad = [s for s in sels if not hittable(page, s)]
             stop_btns = page.query_selector_all(".result [data-act=stop]")
             bad += [f"result {i+1} button" for i, e in enumerate(stop_btns) if not hittable(page, e)]
