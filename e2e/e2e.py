@@ -17,7 +17,8 @@ def check(name, ok, detail=""):
 
 def stops(page):
     return page.evaluate("""() => window.__rts.results.map(s => ({name: s.name, lat: s.ll[1], lon: s.ll[0],
-        aheadMi: s.aheadM/1609.344, detourMin: s.detourS/60, offMi: s.offRouteM/1609.344, exit: s.exit || null, hours: s.hours}))""")
+        aheadMi: s.aheadM/1609.344, detourMin: s.detourS/60, offMi: s.offRouteM/1609.344, exit: s.exit || null, hours: s.hours,
+        section: s.section, status: s.hoursStatus && s.hoursStatus.status, hoursText: s.hoursStatus && s.hoursStatus.text, arriveMin: s.arriveS/60}))""")
 
 def wait_search(page, timeout=90000):
     page.wait_for_function("() => !document.getElementById('searchBtn').disabled", timeout=timeout)
@@ -29,6 +30,19 @@ def search(page, text):
     wait_search(page)
     page.wait_for_timeout(500)
     return stops(page)
+
+def sections_sorted(s):
+    """least extra time first *within* each hours section (open, then hours unknown, then closed)"""
+    order = {"open": 0, "unknown": 1, "closed": 2}
+    secs = [order[x["section"]] for x in s]
+    if secs != sorted(secs): return False
+    for k in order:
+        sc = [x["detourMin"] + x["aheadMi"] / 20 for x in s if x["section"] == k]
+        if sc != sorted(sc): return False
+    return True
+
+def inversion(s):
+    return [(a, c) for i, a in enumerate(s) for c in s[i+1:] if a["section"] == c["section"] and a["aheadMi"] > c["aheadMi"] + 3 and c["detourMin"] > a["detourMin"] + 3]
 
 def car_lat(page):
     return page.evaluate("() => window.__rts.gps && window.__rts.gps[1]")
@@ -42,20 +56,80 @@ with sync_playwright() as p:
     # never actually leave for Apple Maps during the test; record where it would go
     ctx.route("https://maps.apple.com/**", lambda r: (popups.append(r.request.url), r.fulfill(status=200, body="apple maps")))
     page = ctx.new_page()
+    # Hours depend on the time of day: pin the clock to Tuesday Nov 10 2026, 12:00 PM Eastern (timers still run)
+    page.clock.set_fixed_time("2026-11-10T12:00:00-05:00")
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.goto(BASE)
     page.wait_for_timeout(1500)
 
-    # 1. destination with autocomplete
+    # 0a. where to save Home is visible on the start screen
+    check("start screen shows 🏠 Set Home and ★ Saved places without scrolling",
+          page.evaluate("""() => ['setHomeBtn', 'manageSaved'].every(id => { const r = document.getElementById(id).getBoundingClientRect(); return r.height > 40 && r.bottom < innerHeight - 84 && !document.getElementById(id).hidden; })"""))
+    page.screenshot(path=f"{SHOTS}/1-start-screen-set-home.png")
+    # 0. saved places: star a suggestion, add one by typing an address with a custom name, rename, pick one
     page.click("#destInput")
     page.type("#destInput", "Myrtle Beach", delay=40)
-    page.wait_for_selector("#destSuggest li", timeout=15000)
-    first = page.inner_text("#destSuggest li")
+    page.wait_for_selector("#destSuggest li .sg-star", timeout=15000)
+    page.click("#destSuggest li .sg-star")
+    page.wait_for_selector("#saveSheet:not([hidden])")
+    check("star on a suggestion opens Save with its name filled in", page.input_value("#saveName") == "Myrtle Beach", page.input_value("#saveName"))
+    page.fill("#saveName", "Beach trip")
+    page.screenshot(path=f"{SHOTS}/4-save-place-from-autocomplete.png")
+    page.click("#saveConfirm")
+    page.wait_for_selector("#saveSheet", state="hidden")
+    page.fill("#destInput", "")
+    page.keyboard.press("Escape"); page.evaluate("document.activeElement.blur()")
+    page.click("#manageSaved")
+    page.wait_for_timeout(200)
+    check("saved places list prompts to add Home when it's missing", page.is_visible("#homePrompt"))
+    page.screenshot(path=f"{SHOTS}/2-saved-list-add-home-prompt.png")
+    page.click("#homePromptBtn")
+    page.wait_for_selector("#saveSheet:not([hidden]) #saveAddrField:not([hidden])")
+    check("Add Home opens Set Home with the name filled in", page.inner_text("#saveTitle") == "Set Home" and page.input_value("#saveName") == "Home")
+    page.type("#saveAddr", "Carmichaels", delay=40)
+    page.wait_for_selector("#saveSuggest li", timeout=15000)
+    check("typed-address suggestions have no star buttons inside the Save sheet", page.locator("#saveSuggest .sg-star").count() == 0)
+    page.click("#saveSuggest li")
+    page.wait_for_timeout(300)
+    page.screenshot(path=f"{SHOTS}/3-adding-home.png")
+    page.click("#saveConfirm")
+    page.wait_for_selector("#saveSheet", state="hidden")
+    names = page.evaluate("() => window.__rts.saved.map(p => p.name)")
+    check("two places saved (custom names)", names == ["Home", "Beach trip"], str(names))
+    check("Home prompt goes away once Home is saved", not page.is_visible("#homePrompt"))
+    page.click("#savedList .saved-item:nth-child(2) [data-act=rename]")
+    page.fill("#saveName", "Beach house"); page.click("#saveConfirm"); page.wait_for_timeout(300)
+    check("rename a saved place", page.evaluate("() => window.__rts.saved.map(p => p.name)") == ["Home", "Beach house"])
+    page.screenshot(path=f"{SHOTS}/4-saved-places-list.png")
+    page.click("#savedClose")
+    stored = page.evaluate("() => JSON.parse(localStorage.getItem('rts.saved.v1')).length")
+    check("saved places stored on the phone (localStorage)", stored == 2)
+    page.click("#fromInput"); page.wait_for_timeout(300)
+    check("saved places offered as quick picks for the start", page.locator("#fromSuggest li.is-saved").count() == 2)
+    page.keyboard.press("Escape"); page.click("body", position={"x": 5, "y": 5})
+    chips = page.locator("#savedChips .chip").all_inner_texts()
+    check("saved places shown as one-tap destination chips", chips == ["🏠 Home", "★ Beach house"], str(chips))
+    check("Set Home button hides once Home is saved", not page.is_visible("#setHomeBtn"))
+    page.evaluate("window.scrollTo(0,0)")
+    page.screenshot(path=f"{SHOTS}/5-start-screen-home-saved.png")
+    page.click("#savedChips .chip:has-text('Beach house')")
+    page.wait_for_selector("#tripCompact:not([hidden])", timeout=30000)
+    page.wait_for_timeout(2500)
+    check("one tap on a saved place sets it as destination and routes", page.inner_text("#compactDest") == "Beach house" and page.inner_text("#starDestCompact") == "★")
+    page.screenshot(path=f"{SHOTS}/6-saved-place-as-destination.png")
+
+    # 1. destination with autocomplete (typed, the v1.0 way)
+    page.click("#changeTrip")
+    page.click("#destInput")
+    page.fill("#destInput", "")
+    page.type("#destInput", "Myrtle Beach", delay=40)
+    page.wait_for_selector("#destSuggest li:not(.is-saved)", timeout=15000)
+    first = page.inner_text("#destSuggest li:not(.is-saved)")
     check("autocomplete suggests Myrtle Beach", "Myrtle Beach" in first, first.replace("\n", " / "))
     page.screenshot(path=f"{SHOTS}/1a-destination-autocomplete.png")
-    page.click("#destSuggest li")
-    page.wait_for_selector("#tripSummary:not([hidden])", timeout=30000)
+    page.click("#destSuggest li:not(.is-saved)")
+    page.wait_for_selector("#tripCompact:not([hidden])", timeout=30000)
     page.wait_for_timeout(2500)  # tiles
     r = page.evaluate("() => ({mi: window.__rts.route.length/1609.344, pts: window.__rts.route.coords.length})")
     check("driving route drawn from current location", 450 < r["mi"] < 650 and page.locator(".leaflet-overlay-pane path").count() >= 1, f"{r['mi']:.0f} mi, {r['pts']} points")
@@ -112,9 +186,8 @@ with sync_playwright() as p:
     check("gas results on I-79", len(s) >= 3, f"{len(s)} results")
     check("every gas result is ahead", all(x["aheadMi"] > 0 and x["lat"] < I79[0] + 0.01 for x in s))
     check("gas results all within 10 min detour and 50 mi", all(x["detourMin"] <= 10 and x["aheadMi"] <= 50 for x in s))
-    scores = [x["detourMin"] + x["aheadMi"] / 20 for x in s]
-    check("ranked by least extra time (then distance ahead)", scores == sorted(scores))
-    inv = [(a, c) for i, a in enumerate(s) for c in s[i+1:] if a["aheadMi"] > c["aheadMi"] + 3 and c["detourMin"] > a["detourMin"] + 3]
+    check("ranked by least extra time (then distance ahead) within each hours section", sections_sorted(s))
+    inv = inversion(s)
     check("a farther place right off the road outranks a closer one far off the highway", len(inv) >= 1,
           (f"{inv[0][0]['name']} {inv[0][0]['aheadMi']:.1f} mi/+{inv[0][0]['detourMin']:.1f} min ranks above {inv[0][1]['name']} {inv[0][1]['aheadMi']:.1f} mi/+{inv[0][1]['detourMin']:.1f} min") if inv else "no such pair in live data")
     page.wait_for_timeout(6000)
@@ -129,9 +202,8 @@ with sync_playwright() as p:
     s = search(page, "gas")
     check("gas results on I-77", len(s) >= 3, f"{len(s)} results")
     check("every I-77 gas result is ahead (south of the car)", all(x["lat"] < I77[0] + 0.01 for x in s))
-    scores = [x["detourMin"] + x["aheadMi"] / 20 for x in s]
-    check("I-77 gas ranked by least extra time", scores == sorted(scores))
-    inv77 = [(a, c) for i, a in enumerate(s) for c in s[i+1:] if a["aheadMi"] > c["aheadMi"] + 3 and c["detourMin"] > a["detourMin"] + 3]
+    check("I-77 gas ranked by least extra time within each hours section", sections_sorted(s))
+    inv77 = inversion(s)
     check("I-77: farther right-off-the-road place outranks closer far-off one", len(inv77) >= 1,
           (f"{inv77[0][0]['name']} {inv77[0][0]['aheadMi']:.1f} mi/+{inv77[0][0]['detourMin']:.1f} min above {inv77[0][1]['name']} {inv77[0][1]['aheadMi']:.1f} mi/+{inv77[0][1]['detourMin']:.1f} min") if inv77 else "no such pair")
     gas_i77 = s
@@ -157,6 +229,14 @@ with sync_playwright() as p:
     want = f"https://maps.apple.com/directions?destination={dest[1]:.6f},{dest[0]:.6f}&waypoint={first['lat']:.6f},{first['lon']:.6f}&mode=driving"
     check("Add stop link = Apple Maps multi-stop (stop as waypoint, then destination)", href == want, href)
     page.screenshot(path=f"{SHOTS}/4a-stop-sheet.png")
+    page.click("#saveStopBtn")
+    page.wait_for_selector("#saveSheet:not([hidden])")
+    check("save a search result from the stop sheet", page.input_value("#saveName") == first["name"])
+    page.fill("#saveName", "Lunch stop"); page.click("#saveConfirm"); page.wait_for_timeout(300)
+    check("result saved", "Lunch stop" in page.evaluate("() => window.__rts.saved.map(p => p.name)"))
+    page.locator(".result [data-act=stop]").first.click()
+    page.wait_for_selector("#sheet:not([hidden])")
+    check("stop sheet now shows it as saved", page.inner_text("#saveStopBtn").startswith("★"))
     with page.expect_popup() as pop:
         page.click("#addStopBtn")
     pop.value.close()
@@ -185,6 +265,73 @@ with sync_playwright() as p:
     h2 = pg2.get_attribute("#addStopBtn", "href")
     check("iOS 17 fallback: opens directions to the stop (classic link) + Continue later", h2.startswith("https://maps.apple.com/?daddr=") and "Go to this stop" in pg2.inner_text("#addStopBtn"), h2)
 
+    # delete a saved place (two taps so it can't happen by accident)
+    page.evaluate("window.scrollTo(0,0)")
+    page.click("#changeTrip"); page.click("#manageSaved")
+    btn = page.locator("#savedList .saved-item:has-text('Home') [data-act=delete]")
+    btn.click()
+    check("first Delete tap only asks to confirm", "Home" in page.evaluate("() => window.__rts.saved.map(p => p.name).join()") and "Tap again" in btn.inner_text())
+    btn.click(); page.wait_for_timeout(200)
+    check("second tap deletes it", page.evaluate("() => window.__rts.saved.map(p => p.name)") == ["Lunch stop", "Beach house"])
+    check("with Home deleted, the list prompts to add it again", page.is_visible("#homePrompt"))
+    page.click("#savedClose")
+    check("…and Set Home is back on the start screen", page.is_visible("#setHomeBtn"))
+
+    # 6. open-now: evening on I-77, search food. Open places first (with closing-soon notes), hours-unknown below, closed hidden.
+    page.click("#keepTrip"); page.wait_for_selector("#tripCompact:not([hidden])", timeout=5000)
+    check("'Keep my current trip' closes Change trip without re-routing", page.inner_text("#compactDest") == "Myrtle Beach")
+    page.clock.set_fixed_time("2026-11-10T20:00:00-05:00")   # Tuesday 8:00 PM Eastern
+    page.click("#filters summary")
+    page.click(".seg[data-name=maxDetour] button[data-v='10']")
+    page.click(".seg[data-name=lookAhead] button[data-v='50']")
+    wait_search(page)
+    check("Options: 'Open when I get there' is on by default", "on" in page.get_attribute(".seg[data-name=openOnly] button[data-v='1']", "class"))
+    page.click("#filters summary")
+    nom = []
+    page.on("request", lambda r: nom.append(r.url) if "nominatim" in r.url else None)
+    s = search(page, "food")
+    secs = [x["section"] for x in s]
+    check("food at 8 PM: results found", len(s) >= 5, f"{secs.count('open')} open, {secs.count('unknown')} hours unknown")
+    check("open-only: nothing closed at arrival is shown", all(x["status"] in ("open", "closing-soon", "unknown") for x in s))
+    check("confirmed-open places come first, hours-unknown in their own section below", sections_sorted(s) and (not secs.count("unknown") or page.locator(".section-head.section-unknown").count() == 1))
+    soon = [x for x in s if x["status"] == "closing-soon"]
+    check("closing-soon note shown when it closes within an hour of arriving", len(soon) >= 1 and page.locator(".hours.closing-soon").count() == len(soon),
+          f"{soon[0]['name']}: arrive in {soon[0]['arriveMin']:.0f} min → '{soon[0]['hoursText']}'" if soon else "none at this time")
+    hidden = page.evaluate("() => window.__rts.hoursCounts.closed")
+    msg = page.inner_text("#searchMsg")
+    check("search message says how many are open / unknown / hidden", "open when you'd get there" in msg, msg)
+    soon_el = page.locator(".hours.closing-soon").first
+    if soon_el.count():
+        soon_el.evaluate("e => e.closest('.result').scrollIntoView({block: 'start'})")
+        page.evaluate("window.scrollBy(0, -170)")
+    page.wait_for_timeout(500)
+    page.screenshot(path=f"{SHOTS}/7-results-open-only-closing-soon.png")
+    page.locator(".section-head.section-unknown").evaluate("e => e.scrollIntoView({block: 'start'})")
+    page.evaluate("window.scrollBy(0, -260)")
+    page.wait_for_timeout(300)
+    page.screenshot(path=f"{SHOTS}/8-results-hours-unknown-section.png")
+    # toggle closed places on: no new searching, closed section appears at the bottom
+    n0 = len(nom)
+    page.evaluate("window.scrollTo(0, document.getElementById('searchCard').offsetTop - 8)")
+    page.click("#filters summary")
+    page.click(".seg[data-name=openOnly] button[data-v='0']")
+    page.wait_for_timeout(500)
+    page.screenshot(path=f"{SHOTS}/9-options-show-closed-toggle.png")
+    s2 = stops(page)
+    check("'Show closed too' adds the closed places (bottom section) without searching again",
+          len(nom) == n0 and len([x for x in s2 if x["section"] == "closed"]) == hidden and (hidden == 0 or page.locator(".section-head.section-closed").count() == 1), f"{hidden} closed shown")
+    if hidden:
+        page.locator(".section-head.section-closed").evaluate("e => e.scrollIntoView({block: 'start'})")
+        page.evaluate("window.scrollBy(0, -40)")
+        page.wait_for_timeout(300)
+        page.screenshot(path=f"{SHOTS}/10-closed-section.png")
+    page.evaluate("window.scrollTo(0, document.getElementById('searchCard').offsetTop - 8)")
+    page.click(".seg[data-name=openOnly] button[data-v='1']")
+    page.wait_for_timeout(300)
+    check("switching back hides them again", not [x for x in stops(page) if x["section"] == "closed"])
+    unk = [x for x in s if x["section"] == "unknown"]
+    check("each hours-unknown card says so", page.locator(".hours.unknown").count() == len(unk))
+    json.dump({"food_8pm": s}, open(os.path.join(SHOTS, "food-8pm.json"), "w"), indent=1)
     check("no JavaScript errors", not errors, "; ".join(errors[:3]))
     json.dump({"cfa_i79": cfa_i79, "gas_i79": gas_i79, "gas_i77": gas_i77, "cfa_i77": cfa_i77}, open(os.path.join(SHOTS, "last-results.json"), "w"), indent=1)
     b.close()

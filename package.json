@@ -1,6 +1,6 @@
 {
   "name": "road-trip-stops",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "scripts": { "test": "node --test test/*.test.mjs" }

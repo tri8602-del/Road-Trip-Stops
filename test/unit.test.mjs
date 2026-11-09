@@ -6,7 +6,6 @@ import {
   parseNominatim, dedupePlaces, exitFromSteps, corridorBoxes, corridorForDetour,
 } from '../js/search.js';
 import { findStops } from '../js/pipeline.js';
-import { openNow, parseHours } from '../js/hours.js';
 import { addStopUrl, directionsUrl, legacyDirectionsUrl, iosVersion, supportsStops, placeUrl } from '../js/apple.js';
 
 // A straight highway heading north along lon -80 from lat 39.0 to 40.0 (~111 km) at 30 m/s (67 mph).
@@ -77,6 +76,9 @@ test('a place right off an exit 20 miles ahead beats one 2 miles ahead that is f
   assert.ok(exit.detourS < 90, `exit detour ${exit.detourS}s`);
   assert.ok(far.detourS > 9 * 60, `far detour ${far.detourS}s`);
   assert.ok(Math.abs(exit.offRouteM - 200) < 30, `off route ${exit.offRouteM}`);
+  // arrival = drive 20 mi of highway at 30 m/s (minus the 4 km anchor) + the hop off the highway
+  const expectArrive = (20 * MI - 4000) / 30 + (4000 / 30 + 200 / 12);
+  assert.ok(Math.abs(exit.arriveS - expectArrive) < 20, `arrive ${exit.arriveS} vs ${expectArrive}`);
   const ranked = rankStops(timed, { maxDetourMin: 15, lookAheadMi: 50 });
   assert.deepEqual(ranked.map((p) => p.id), ['right-off-exit', 'close-but-far-off']);
   // with a 5 minute limit the far-off one disappears
@@ -179,19 +181,6 @@ test('exit numbers from turn-by-turn steps', () => {
   assert.deepEqual(exitFromSteps(steps), { ref: '119', signs: 'US 50: Clarksburg', road: 'Emily Drive', offM: 700 });
   assert.equal(exitFromSteps([]), null);
   assert.deepEqual(exitFromSteps([{ maneuver: { type: 'depart' } }, { maneuver: { type: 'turn' }, ref: 'WV 41', name: 'Main' }]), { ref: '', signs: '', road: 'WV 41' });
-});
-
-test('open now from opening_hours', () => {
-  const tue10am = new Date(2026, 10, 10, 10, 0); // Tue Nov 10 2026
-  const sun10am = new Date(2026, 10, 8, 10, 0);
-  assert.deepEqual(openNow('24/7', tue10am), { open: true, text: 'Open 24 hours' });
-  assert.deepEqual(openNow('Mo-Sa 06:00-22:00; Su off', tue10am), { open: true, text: 'Open until 10 PM' });
-  assert.deepEqual(openNow('Mo-Sa 06:00-22:00; Su off', sun10am), { open: false, text: 'Closed now' });
-  assert.deepEqual(openNow('Mo-Fr 11:00-14:00,17:00-21:00', tue10am), { open: false, text: 'Closed · opens 11 AM' });
-  assert.deepEqual(openNow('Mo-Su 18:00-02:00', new Date(2026, 10, 10, 1, 30)), { open: true, text: 'Open until 2 AM' });
-  assert.equal(openNow('', tue10am), null);
-  assert.equal(openNow('Jan-Mar Mo 08:00-10:00', tue10am), null, 'unusual formats are not guessed');
-  assert.ok(parseHours('06:30-21:30'));
 });
 
 test('Apple Maps links', () => {

@@ -78,6 +78,7 @@ export function parseNominatim(results) {
       ll: [Number(r.lon), Number(r.lat)],
       hours: r.extratags?.opening_hours || '',
       address: formatAddress(r.address || {}),
+      state: r.address?.state || '',
       phone: r.extratags?.phone || r.extratags?.['contact:phone'] || '',
       website: r.extratags?.website || r.extratags?.['contact:website'] || '',
     });
@@ -159,6 +160,7 @@ export function detourAnchors(route, place, carAlong, spanM = 4000) {
  */
 export async function computeDetours(route, places, carAlong, table, batch = 25) {
   const out = [];
+  const carTime = pointAtDistance(route, carAlong).time;
   for (let i = 0; i < places.length; i += batch) {
     const chunk = places.slice(i, i + batch);
     const anchors = chunk.map((p) => detourAnchors(route, p, carAlong));
@@ -175,8 +177,10 @@ export async function computeDetours(route, places, carAlong, table, batch = 25)
       if (tAP == null || tPB == null) return; // unreachable
       const a = anchors[k];
       const detourS = Math.max(0, tAP + tPB - a.routeTimeAB);
+      // seconds from now until she'd pull in: drive the route to the turn-off, then to the place
+      const arriveS = Math.max(0, a.A.time - carTime) + tAP;
       const extraM = dAP != null && dPB != null ? Math.max(0, dAP + dPB - a.routeDistAB) : 2 * p.offset;
-      out.push({ ...p, detourS, offRouteM: extraM / 2 });
+      out.push({ ...p, detourS, arriveS, offRouteM: extraM / 2 });
     });
   }
   return out;

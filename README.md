@@ -7,6 +7,11 @@ Tap **Add this stop** and Apple Maps opens with the stop added, then your destin
 
 Save it to the Home Screen from Safari (Share → Add to Home Screen).
 
+**Saved places:** tap **🏠 Set Home** on the start screen, or tap ☆ next to any address suggestion, on a search result, or on your destination, or use
+**★ Saved places → Add a place** to type an address and give it a name (Home, Grandma's…). Saved places show as
+one-tap destination buttons and at the top of the From / To lists. Rename or delete them under ★ Saved places.
+They're kept only on this phone (no account).
+
 ## How it works
 - **Route:** Apple doesn't let other apps read the route planned in Apple Maps, so the app works out the same driving
   route itself from your location (or a typed start) to the destination.
@@ -16,7 +21,14 @@ Save it to the Home Screen from Safari (Share → Add to Home Screen).
   "right across the highway" doesn't count as close.
 - **Order:** extra minutes + 1 minute for every 20 miles ahead (least first). "Soonest" in Options sorts by distance instead.
 - **Exits:** for the first six results, the turn-by-turn directions give the exit (number when OpenStreetMap has it, and the signs).
-- **Open now:** from OpenStreetMap opening hours when listed. Ratings aren't in this free data; "See it in Apple Maps" shows Apple's.
+- **Open when you get there (on by default):** each place's OpenStreetMap opening hours are read with the
+  [opening_hours](https://github.com/opening-hours/opening_hours.js) library (holidays, 24/7, overnight hours) at the time
+  you'd *arrive* (now + drive time), in the place's own time zone. Closed places are hidden (Options → "Show closed too"
+  brings them back in their own section). "Closes soon — closes 9:00 PM" shows when it closes within an hour of arriving.
+  Places with no hours listed go in a separate **Hours not listed** section below the confirmed-open ones
+  (in testing about 3 in 4 results had no hours; gas stations almost never list them). Well-known 24-hour chains get a
+  "usually open 24 hours" hint, never treated as confirmed.
+- Ratings aren't in this free data; "See it in Apple Maps" shows Apple's.
 
 ## Apple Maps links
 Uses Apple's unified Maps URLs (iOS 18.4+): `https://maps.apple.com/directions?destination=LAT,LON&waypoint=LAT,LON&mode=driving`
@@ -38,5 +50,6 @@ Map data © OpenStreetMap contributors.
 npm test                                   # unit tests (ranking, ahead-only, detours, hours, Apple links)
 python3 -m http.server 8811 &              # serve this folder
 python3 e2e/e2e.py                         # Chromium, iPhone size, simulated GPS on Carmichaels PA → Myrtle Beach SC
+python3 e2e/layout.py                      # every control tappable at 375/390/430 widths with Safari's toolbar or the home bar
 ```
 The end-to-end test uses the live free services.
